@@ -239,6 +239,13 @@ export type StopOptions = {
    */
   timeout?: number
   /**
+   * The first timeout before the database is checked for active
+   * connections.
+   *
+   * @default 0
+   */
+  initialTimeout?: number
+  /**
    * If true, the database is forcibly stopped even if there are
    * active connections.
    */
@@ -263,16 +270,23 @@ export type StopOptions = {
   verbose?: boolean
 }
 
-export async function stop(
-  dataDir: string,
-  { keep, timeout = 5, host, port, stdio, verbose }: StopOptions = {},
-) {
+export async function stop(dataDir: string, options: StopOptions = {}) {
   const pgVersion = await getPostgresVersion()
   dataDir = path.join(dataDir, pgVersion)
 
   if (!(await stat(dataDir))?.isDirectory()) {
     throw new Error('Please specify a valid PostgreSQL data directory')
   }
+
+  const {
+    keep,
+    timeout = 5,
+    initialTimeout = 0,
+    host,
+    port,
+    stdio,
+    verbose,
+  } = options
 
   const env = {
     ...process.env,
@@ -294,8 +308,8 @@ export async function stop(
       WHERE datname IS NOT NULL
       AND state IS NOT NULL;
     `
-    for (let count = 2; count >= 2; ) {
-      await sleep(timeout * 1000)
+    for (let count = 2, attempts = 0; count >= 2; ) {
+      await sleep((attempts++ ? timeout : initialTimeout) * 1000)
       const [error, result] = await tryit(spawn)(
         'psql',
         ['test', '--no-psqlrc', '-At', '-c', testQuery],

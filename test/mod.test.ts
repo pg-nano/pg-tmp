@@ -18,7 +18,7 @@ test('full lifecycle', async () => {
   })
   expect(typeof dsn).toBe('string')
   await verifyDatabase(dsn)
-  await stop(dataDir, { timeout: 0 })
+  await stop(dataDir)
 })
 
 test('automatic deletion', async () => {
@@ -42,7 +42,7 @@ test('automatic deletion', async () => {
     }
   })
 
-  // Wait for the data directory to be removed.
+  // Wait for the data directory to be automatically removed.
   while (true) {
     await sleep(100)
     if (!fs.existsSync(dataDir)) {

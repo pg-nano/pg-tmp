@@ -19,6 +19,8 @@ const options = shake({
   port,
   keep,
   timeout,
+  // The timeout is immediately active in the background.
+  initialTimeout: timeout,
 })
 
 console.log('options =>', options)
