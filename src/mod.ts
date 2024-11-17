@@ -67,7 +67,7 @@ export type StartOptions = {
    * false, a Unix socket is used at the root of the data directory.
    * You may also specify a custom host address.
    *
-   * @default true
+   * @default false
    */
   host?: string | boolean
   /**
@@ -102,7 +102,7 @@ export type StartOptions = {
 
 export async function start({
   dataDir,
-  host = true,
+  host = false,
   port,
   timeout = 60,
   keep,
