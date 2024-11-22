@@ -87,7 +87,11 @@ describe('initdb', () => {
 afterAll(async () => {
   const cwd = os.tmpdir()
   for (const dir of fs.globSync(PREFIX + '*', { cwd })) {
-    fs.rmSync(path.join(cwd, dir), { recursive: true })
+    fs.rmSync(path.join(cwd, dir), {
+      maxRetries: 3,
+      recursive: true,
+      force: true,
+    })
   }
 })
 

@@ -339,6 +339,7 @@ export async function stop(dataDir: string, options: StopOptions = {}) {
       console.log('removing data directory...')
     }
     rmSync(path.dirname(dataDir), {
+      maxRetries: 3,
       recursive: true,
       force: true,
     })
