@@ -10,5 +10,8 @@ export default defineConfig({
         singleFork: true,
       },
     },
+    env: {
+      PGTMP_TEST: 'true',
+    },
   },
 })

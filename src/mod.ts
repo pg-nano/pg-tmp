@@ -7,6 +7,7 @@ import { dedent, sift, sleep, tryit } from 'radashi'
 import spawn from 'tinyspawn'
 
 const OS_TMP = os.tmpdir()
+const isTest = !!process.env.PGTMP_TEST
 
 /**
  * Data directories created by this module are named with this prefix.
@@ -139,9 +140,8 @@ export async function start({
     backgroundSpawn(
       'node',
       sift([
-        !!process.env.TEST && '--experimental-strip-types',
-        new URL(`./initdb.${process.env.TEST ? 'ts' : 'js'}`, import.meta.url)
-          .pathname,
+        isTest && '--experimental-strip-types',
+        new URL(`./initdb.${isTest ? 'ts' : 'js'}`, import.meta.url).pathname,
       ]),
     )
   }
@@ -167,9 +167,8 @@ export async function start({
     backgroundSpawn(
       'node',
       sift([
-        !!process.env.TEST && '--experimental-strip-types',
-        new URL(`./stop.${process.env.TEST ? 'ts' : 'js'}`, import.meta.url)
-          .pathname,
+        isTest && '--experimental-strip-types',
+        new URL(`./stop.${isTest ? 'ts' : 'js'}`, import.meta.url).pathname,
         dataDir,
         host && '--host=' + host,
         port && '--port=' + port,
