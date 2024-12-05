@@ -4,6 +4,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { dedent, noop, sift, sleep, tryit } from 'radashi'
+import { glob } from 'tinyglobby'
 import spawn from 'tinyspawn'
 
 const OS_TMP = os.tmpdir()
@@ -114,7 +115,7 @@ export async function start({
   if (!dataDir) {
     // Look for an existing pg_tmp.* directory that was optimistically
     // initialized by a previous `start` call.
-    for await (let dir of fs.glob(PREFIX + '*', { cwd: OS_TMP })) {
+    for (let dir of await glob(PREFIX + '*', { cwd: OS_TMP })) {
       dir = path.join(OS_TMP, dir)
 
       // Postgres versions must match.
