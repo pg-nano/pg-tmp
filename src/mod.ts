@@ -3,7 +3,7 @@ import { promises as fs, rmSync } from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { dedent, sift, sleep, tryit } from 'radashi'
+import { dedent, noop, sift, sleep, tryit } from 'radashi'
 import spawn from 'tinyspawn'
 
 const OS_TMP = os.tmpdir()
@@ -122,7 +122,7 @@ export async function start({
         // The 'NEW' file must exist and be owned by the current user.
         const unusedMarker = path.join(dir, 'NEW')
         if (await isOwnedByCurrentUser(unusedMarker)) {
-          await fs.rm(unusedMarker)
+          await fs.rm(unusedMarker).catch(noop)
 
           dataDir = dir
           break
@@ -133,7 +133,7 @@ export async function start({
     // Create a new data directory if none was found.
     if (!dataDir) {
       dataDir = await initdb()
-      await fs.rm(path.join(dataDir, 'NEW'))
+      await fs.rm(path.join(dataDir, 'NEW')).catch(noop)
     }
 
     // Optimistically initialize another database to speed up future calls.
@@ -375,9 +375,10 @@ async function isOwnedByCurrentUser(path: string) {
   }
   if (process.platform === 'win32') {
     const username = await exec('cmd', ['/c', 'echo %username%'])
-    const owner = (await exec('cmd', ['/c', `icacls "${path}"`]))
-      .match(/Owner:\s*(.*)/)?.[1]
-      .trim()
+    const owner = await exec('cmd', ['/c', `icacls "${path}"`]).then(
+      owner => owner.match(/Owner:\s*(.*)/)?.[1].trim(),
+      noop,
+    )
 
     return username === owner
   }
