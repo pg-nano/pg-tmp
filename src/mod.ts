@@ -206,7 +206,10 @@ export async function start({
         },
       })
       break
-    } catch (error) {
+    } catch (error: any) {
+      if (error.message.includes('already exists')) {
+        break
+      }
       if (++i < 5) {
         await sleep(100)
       } else {
