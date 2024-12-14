@@ -14,11 +14,9 @@
     }
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=18"
   },
-  "files": [
-    "dist"
-  ],
+  "files": ["dist"],
   "scripts": {
     "test": "vitest",
     "dev": "tsup --watch --sourcemap",
