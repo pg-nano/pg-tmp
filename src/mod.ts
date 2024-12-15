@@ -289,6 +289,7 @@ export async function stop(dataDir: string, options: StopOptions = {}) {
     port,
     stdio,
     verbose,
+    force,
   } = options
 
   const env = {
@@ -299,7 +300,7 @@ export async function stop(dataDir: string, options: StopOptions = {}) {
 
   // If the timeout is set to zero or negative, stop the database even
   // if there are active connections.
-  if (timeout > 0) {
+  if (!force && timeout > 0) {
     if (verbose) {
       console.log('waiting for active connections to finish')
     }
