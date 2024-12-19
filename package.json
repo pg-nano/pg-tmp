@@ -1,7 +1,7 @@
 {
   "name": "@pg-nano/pg-tmp",
   "type": "module",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -16,7 +16,9 @@
   "engines": {
     "node": ">=18"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "test": "vitest",
     "dev": "tsup --watch --sourcemap",
