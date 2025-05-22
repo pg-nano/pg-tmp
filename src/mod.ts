@@ -15,9 +15,34 @@ const isTest = !!process.env.PGTMP_TEST
  */
 export const PREFIX = 'pg_tmp.'
 
+export type InitOptions = {
+  /**
+   * Control the I/O streams of the `initdb` command. The only useful
+   * value is `'inherit'`, which forwards the I/O streams to the
+   * parent process (for debugging purposes mainly).
+   */
+  stdio?: StdioOptions
+}
+
+/**
+ * Initializes a new PostgreSQL data directory.
+ *
+ * This function sets up the necessary file structure and
+ * configuration for a new PostgreSQL instance. It creates a data
+ * directory (or uses an existing one if provided), configures it for
+ * optimal performance in temporary environments (e.g. disabling
+ * fsync), and prepares it for starting a PostgreSQL server.
+ *
+ * @param dataDir - Optional. The path to the directory where
+ *   PostgreSQL data will be stored. If `null` or unspecified, a new
+ *   temporary directory will be created automatically with the prefix
+ *   `"pg_tmp."`.
+ * @returns A promise that resolves to the path of the initialized
+ * data directory.
+ */
 export async function initdb(
   dataDir?: string | null,
-  { stdio }: { stdio?: StdioOptions } = {},
+  { stdio }: InitOptions = {},
 ) {
   dataDir ||= await fs.mkdtemp(path.join(OS_TMP, PREFIX))
 
@@ -102,6 +127,23 @@ export type StartOptions = {
   postgresOptions?: string
 }
 
+/**
+ * Starts a PostgreSQL server instance.
+ *
+ * This function handles the creation or reuse of a data directory,
+ * starts the `postgres` process, and ensures a test database is
+ * available. It can manage the server's lifecycle with an automatic
+ * shutdown timeout and provides options for network configuration
+ * (host and port).
+ *
+ * You are not required to call `initdb` before calling `start`. If
+ * you don't, a new data directory will be created automatically.
+ *
+ * @returns A promise that resolves to the DSN (Data Source Name)
+ *   string for connecting to the 'test' database. The DSN format will
+ *   be `postgresql://{host}:{port}/test` if a host and port are used,
+ *   or `postgresql:///test?host={dataDir}` if a Unix socket is used.
+ */
 export async function start({
   dataDir,
   host = false,
@@ -273,6 +315,23 @@ export type StopOptions = {
   verbose?: boolean
 }
 
+/**
+ * Stops a running PostgreSQL server instance and optionally cleans up
+ * its data directory.
+ *
+ * This function gracefully stops the PostgreSQL server associated
+ * with the given data directory. It can wait for active connections
+ * to close before shutting down and can remove the data directory
+ * unless specified otherwise.
+ *
+ * @param dataDir - The root path of the PostgreSQL data directory
+ * (the one created by `initdb` or `start`, not the versioned
+ * subdirectory).
+ * @returns A promise that resolves when the server has been stopped
+ * and cleanup (if any) is complete.
+ * @throws Will throw an error if the specified `dataDir` is not a
+ * valid PostgreSQL data directory.
+ */
 export async function stop(dataDir: string, options: StopOptions = {}) {
   const pgVersion = await getPostgresVersion()
   dataDir = path.join(dataDir, pgVersion)
