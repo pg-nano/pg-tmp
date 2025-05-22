@@ -5,6 +5,7 @@
     "allowImportingTsExtensions": true,
     "module": "esnext",
     "moduleResolution": "bundler",
-    "target": "esnext"
+    "target": "esnext",
+    "noEmit": true
   }
 }
