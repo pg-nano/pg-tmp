@@ -144,15 +144,10 @@ export type StartOptions = {
  *   be `postgresql://{host}:{port}/test` if a host and port are used,
  *   or `postgresql:///test?host={dataDir}` if a Unix socket is used.
  */
-export async function start({
-  dataDir,
-  host = false,
-  port,
-  timeout = 60,
-  keep,
-  postgresOptions = '',
-}: StartOptions = {}) {
+export async function start(options: StartOptions = {}) {
   const pgVersion = await getPostgresVersion()
+
+  let { dataDir } = options
 
   if (!dataDir) {
     // Look for an existing pg_tmp.* directory that was optimistically
@@ -195,8 +190,13 @@ export async function start({
     await initdb(dataDir)
   }
 
-  if (host) {
-    if (host === true) {
+  let { postgresOptions = '', timeout = 60 } = options
+
+  let host: string | undefined
+  let port: number | undefined
+
+  if (options.host) {
+    if (options.host === true) {
       host = '127.0.0.1'
     }
     port ??= await getUnusedPort()
@@ -216,7 +216,7 @@ export async function start({
         host && '--host=' + host,
         port && '--port=' + port,
         '--timeout=' + timeout,
-        keep && '--keep',
+        options.keep && '--keep',
       ]),
     )
   }
@@ -260,9 +260,13 @@ export async function start({
     }
   }
 
-  return port
-    ? `postgresql://${host}:${port}/test`
-    : `postgresql:///test?host=${encodeURIComponent(dataDir)}`
+  return {
+    dsn: port
+      ? `postgresql://${host}:${port}/test`
+      : `postgresql:///test?host=${encodeURIComponent(dataDir)}`,
+    dataDir,
+    stop: (options?: StopOptions) => stop(dataDir, { host, port, ...options }),
+  }
 }
 
 export type StopOptions = {
