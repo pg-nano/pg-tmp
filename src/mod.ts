@@ -128,6 +128,11 @@ export type StartOptions = {
 }
 
 /**
+ * The object returned by the `start` function.
+ */
+export type PgTmp = Awaited<ReturnType<typeof start>>
+
+/**
  * Starts a PostgreSQL server instance.
  *
  * This function handles the creation or reuse of a data directory,
