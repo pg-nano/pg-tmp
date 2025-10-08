@@ -3,13 +3,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { sleep } from 'radashi'
 import spawn from 'tinyspawn'
-import { initdb, PREFIX, start, stop } from '../src/mod.ts'
+import { initdb, PREFIX, start } from '../src/mod.ts'
 
 const pgVersion = await getPostgresVersion()
 
 test('full lifecycle', async () => {
   const dataDir = await initdb()
-  const dsn = await start({
+  const { dsn, stop } = await start({
     timeout: 0,
     dataDir,
   }).catch(error => {
@@ -18,12 +18,12 @@ test('full lifecycle', async () => {
   })
   expect(typeof dsn).toBe('string')
   await verifyDatabase(dsn)
-  await stop(dataDir)
+  await stop()
 })
 
 test('automatic deletion', async () => {
   const dataDir = await initdb()
-  const dsn = await start({
+  const { dsn } = await start({
     timeout: 0.5,
     dataDir,
   })
