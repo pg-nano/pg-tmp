@@ -201,9 +201,7 @@ export async function start(options: StartOptions = {}) {
   let port: number | undefined
 
   if (options.host) {
-    if (options.host === true) {
-      host = '127.0.0.1'
-    }
+    host = options.host === true ? '127.0.0.1' : options.host
     port ??= await getUnusedPort()
     postgresOptions &&= postgresOptions + ' '
     postgresOptions += `-c listen_addresses='*' -c port=${port}`
