@@ -224,15 +224,15 @@ export async function start(options: StartOptions = {}) {
     )
   }
 
-  dataDir = path.join(dataDir, pgVersion)
+  const versionedDataDir = path.join(dataDir, pgVersion)
 
   const startFlags = [
     '-W', // Don't wait for confirmation
     '-s', // Silent mode
     '-D', // Data directory
-    dataDir,
+    versionedDataDir,
     '-l', // Log file
-    path.join(dataDir, 'postgres.log'),
+    path.join(versionedDataDir, 'postgres.log'),
   ]
 
   if (postgresOptions) {
@@ -246,7 +246,7 @@ export async function start(options: StartOptions = {}) {
       await spawn('createdb', ['-E', 'UNICODE', 'test'], {
         env: {
           ...process.env,
-          PGHOST: dataDir,
+          PGHOST: versionedDataDir,
           PGPORT: String(port ?? ''),
         },
       })
@@ -266,7 +266,7 @@ export async function start(options: StartOptions = {}) {
   return {
     dsn: port
       ? `postgresql://${host}:${port}/test`
-      : `postgresql:///test?host=${encodeURIComponent(dataDir)}`,
+      : `postgresql:///test?host=${encodeURIComponent(versionedDataDir)}`,
     dataDir,
     stop: (options?: StopOptions) => stop(dataDir, { host, port, ...options }),
   }
