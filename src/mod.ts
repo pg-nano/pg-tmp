@@ -19,35 +19,54 @@ const OS_TMP = os.tmpdir()
 const isTest = !!process.env.PGTMP_TEST
 
 /**
- * Data directories created by this module are named with this prefix.
+ * Prefix used for temporary root directories created under `os.tmpdir()`.
+ *
+ * @remarks
+ * `start()` scans directories with this prefix when it looks for a prewarmed
+ * cluster that can be claimed with its `NEW` marker.
  */
 export const PREFIX = 'pg_tmp.'
 const DATA_DIR = 'data'
 
+/**
+ * Options for `initdb()`.
+ */
 export type InitOptions = {
   /**
-   * Control the I/O streams of the `initdb` command. The only useful
-   * value is `'inherit'`, which forwards the I/O streams to the
-   * parent process (for debugging purposes mainly).
+   * Controls `initdb` output.
+   *
+   * @remarks
+   * Only `'inherit'` is honored. It forwards `initdb` output to the parent
+   * process, which is useful when debugging local Postgres installation or
+   * initialization failures.
    */
   stdio?: StdioOptions
 }
 
 /**
- * Initializes a new PostgreSQL data directory.
+ * Initializes a temporary PostgreSQL root directory.
  *
- * This function sets up the necessary file structure and
- * configuration for a new PostgreSQL instance. It creates a data
- * directory (or uses an existing one if provided), configures it for
- * optimal performance in temporary environments (e.g. disabling
- * fsync), and prepares it for starting a PostgreSQL server.
+ * The returned directory is the pg-tmp container root. The actual PostgreSQL
+ * cluster is created in its `data` child directory, and the root receives a
+ * `NEW` marker so a later `start()` call can claim prewarmed clusters.
  *
- * @param dataDir - Optional. The path to the directory where
- *   PostgreSQL data will be stored. If `null` or unspecified, a new
- *   temporary directory will be created automatically with the prefix
- *   `"pg_tmp."`.
- * @returns A promise that resolves to the path of the initialized
- * data directory.
+ * @param dataDir - Optional container root. When omitted or `null`, a new
+ * directory is created under `os.tmpdir()` with the `PREFIX` prefix.
+ * @param options - Initialization options.
+ * @returns The initialized container root.
+ * @throws If the container already has an initialized `data` directory, if the
+ * current user cannot initialize it, or if local Postgres binaries are missing
+ * or fail.
+ *
+ * @example
+ * ```ts
+ * import { initdb, start } from '@pg-nano/pg-tmp'
+ *
+ * const dataDir = await initdb()
+ * const pg = await start({ dataDir, timeout: 0 })
+ *
+ * await pg.stop()
+ * ```
  */
 export async function initdb(
   dataDir?: string | null,
@@ -86,23 +105,36 @@ export async function initdb(
   return dataDir
 }
 
+/**
+ * Options for `start()`.
+ */
 export type StartOptions = {
   /**
-   * Where the PostgreSQL data directory is located. If unspecified, a
-   * new directory is created.
+   * pg-tmp container root.
+   *
+   * @remarks
+   * If omitted, `start()` first tries to claim a prewarmed `pg_tmp.*` directory
+   * with a compatible `data/PG_VERSION` file and a `NEW` marker. If no
+   * compatible prewarmed root exists, it initializes a new one.
    */
   dataDir?: string
   /**
-   * If true, the PostgreSQL instance will listen on `127.0.0.1`. If
-   * false, a Unix socket is used at the root of the data directory.
-   * You may also specify a custom host address.
+   * Controls whether Postgres listens on TCP instead of the default Unix
+   * socket.
+   *
+   * @remarks
+   * Use `true` to listen on `127.0.0.1`, or pass a custom host address. When
+   * omitted or `false`, pg-tmp uses a Unix socket in the `data` directory.
    *
    * @default false
    */
   host?: string | boolean
   /**
-   * The port to listen on. If unspecified, an unused port is selected
-   * automatically.
+   * TCP port to listen on when `host` is enabled.
+   *
+   * @remarks
+   * When `host` is enabled and `port` is omitted, an unused local port is
+   * selected. Socket mode ignores this option.
    */
   port?: number
   /**
@@ -118,41 +150,71 @@ export type StartOptions = {
    */
   timeout?: number
   /**
-   * If true, the data directory won't be removed when the PostgreSQL
-   * instance is stopped.
+   * Preserve the pg-tmp container root after the background or manual stop.
+   *
+   * @default false
    */
   keep?: boolean
   /**
-   * Options passed directly to the `postgres` command.
+   * Extra options passed directly to the `postgres` process.
    *
-   * Note that `listen_addresses` and `port` are already set for you.
+   * @remarks
+   * This string is split into process arguments before startup. Do not set
+   * `listen_addresses` or `port`; pg-tmp configures those from `host` and
+   * `port`.
    */
   postgresOptions?: string
 }
 
 /**
- * The object returned by the `start` function.
+ * Running temporary PostgreSQL server returned by `start()`.
  */
-export type PgTmp = Awaited<ReturnType<typeof start>>
+export type PgTmp = {
+  /**
+   * Connection string for the `test` database.
+   *
+   * @remarks
+   * Socket mode returns `postgresql:///test?host=...`. TCP mode returns
+   * `postgresql://host:port/test`.
+   */
+  dsn: string
+  /**
+   * pg-tmp container root. The actual PostgreSQL cluster is in `dataDir/data`.
+   */
+  dataDir: string
+  /**
+   * Stops Postgres and removes the container root unless `keep` is true.
+   */
+  stop(options?: StopOptions): Promise<void>
+}
 
 /**
- * Starts a PostgreSQL server instance.
+ * Starts a temporary PostgreSQL server and returns connection details.
  *
- * This function handles the creation or reuse of a data directory,
- * starts the `postgres` process, and ensures a test database is
- * available. It can manage the server's lifecycle with an automatic
- * shutdown timeout and provides options for network configuration
- * (host and port).
+ * `start()` claims or initializes a pg-tmp container root, starts Postgres,
+ * ensures the `test` database exists, and schedules a background stop process
+ * unless `timeout` is zero or negative.
  *
- * You are not required to call `initdb` before calling `start`. If
- * you don't, a new data directory will be created automatically.
+ * @param options - Startup and lifecycle options.
+ * @returns A running server handle with a connection string, container root,
+ * and manual `stop()` method.
+ * @throws If a provided container has an incompatible `data/PG_VERSION`, if
+ * Postgres cannot start, or if the `test` database cannot be created.
  *
- * @returns A promise that resolves to the DSN (Data Source Name)
- *   string for connecting to the 'test' database. The DSN format will
- *   be `postgresql://{host}:{port}/test` if a host and port are used,
- *   or `postgresql:///test?host={dataDir}` if a Unix socket is used.
+ * @example
+ * ```ts
+ * import { start } from '@pg-nano/pg-tmp'
+ *
+ * const pg = await start({ timeout: 0 })
+ *
+ * try {
+ *   console.log(pg.dsn)
+ * } finally {
+ *   await pg.stop()
+ * }
+ * ```
  */
-export async function start(options: StartOptions = {}) {
+export async function start(options: StartOptions = {}): Promise<PgTmp> {
   const pgVersion = await getPostgresVersion()
   const pgDataVersion = getPostgresDataVersion(pgVersion)
 
@@ -267,10 +329,14 @@ export async function start(options: StartOptions = {}) {
   }
 }
 
+/**
+ * Options for `stop()`.
+ */
 export type StopOptions = {
   /**
-   * If true, the data directory won't be removed when the PostgreSQL
-   * instance is stopped.
+   * Preserve the pg-tmp container root after Postgres stops.
+   *
+   * @default false
    */
   keep?: boolean
   /**
@@ -286,53 +352,55 @@ export type StopOptions = {
    */
   timeout?: number
   /**
-   * The first timeout before the database is checked for active
-   * connections.
+   * Delay in seconds before the first active-connection check.
    *
    * @default 0
    */
   initialTimeout?: number
   /**
-   * If true, the database is forcibly stopped even if there are
-   * active connections.
+   * Stop without waiting for active connections to finish.
    */
   force?: boolean
   /**
-   * The host to connect to.
+   * TCP host used by a server started with `host`.
    */
   host?: string
   /**
-   * The port to connect to.
+   * TCP port used by a server started with `host`.
    */
   port?: number
   /**
-   * Control the I/O streams of the `pg_ctl stop` command. The only
-   * useful value is `'inherit'`, which forwards the I/O streams to
-   * the parent process (for debugging purposes mainly).
+   * Retained for compatibility with older pg-tmp releases.
+   *
+   * @deprecated `stop()` no longer invokes `pg_ctl` directly, so this option
+   * has no effect.
    */
   stdio?: StdioOptions
   /**
-   * Enable verbose logging.
+   * Print lifecycle messages while waiting for connections, stopping Postgres,
+   * and removing the container root.
    */
   verbose?: boolean
 }
 
 /**
- * Stops a running PostgreSQL server instance and optionally cleans up
- * its data directory.
+ * Stops a running temporary PostgreSQL server.
  *
- * This function gracefully stops the PostgreSQL server associated
- * with the given data directory. It can wait for active connections
- * to close before shutting down and can remove the data directory
- * unless specified otherwise.
+ * By default, `stop()` waits for active connections to the `test` database to
+ * finish, stops Postgres, and removes the pg-tmp container root.
  *
- * @param dataDir - The root path of the PostgreSQL data directory
- * (the one created by `initdb` or `start`, not the versioned
- * subdirectory).
- * @returns A promise that resolves when the server has been stopped
- * and cleanup (if any) is complete.
- * @throws Will throw an error if the specified `dataDir` is not a
- * valid PostgreSQL data directory.
+ * @param dataDir - pg-tmp container root returned by `initdb()` or `start()`.
+ * @param options - Stop and cleanup options.
+ * @throws If `dataDir/data` is not an initialized PostgreSQL data directory,
+ * if idle waiting fails, or if Postgres does not stop before its shutdown
+ * timeout.
+ *
+ * @example
+ * ```ts
+ * import { stop } from '@pg-nano/pg-tmp'
+ *
+ * await stop('/tmp/pg_tmp.example', { force: true })
+ * ```
  */
 export async function stop(dataDir: string, options: StopOptions = {}) {
   dataDir = path.join(dataDir, DATA_DIR)

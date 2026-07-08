@@ -21,6 +21,8 @@
   ],
   "scripts": {
     "test": "vitest",
+    "docs:build": "lildocs build ./docs",
+    "docs:dev": "lildocs dev ./docs",
     "dev": "tsup --watch --sourcemap",
     "build": "rimraf dist && tsup",
     "prepublishOnly": "pnpm build"

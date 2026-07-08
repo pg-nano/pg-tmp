@@ -1,3 +1,6 @@
 # @pg-nano/pg-tmp
 
 A port of [ephemeralpg](https://github.com/eradman/ephemeralpg) to Node.js 18+.
+
+See [the documentation](docs/index.md) for installation, lifecycle, and cleanup
+guidance.
