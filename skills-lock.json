@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "lildocs": {
+      "source": "/Users/alec/dev/oss/lildocs",
+      "sourceType": "local",
+      "computedHash": "a746b8c6f576a3a3464617072386e4095b0d929c15e618fef2de44cd7e4da010"
+    }
+  }
+}

@@ -2,4 +2,5 @@ allowBuilds:
   '@biomejs/biome': true
   esbuild: true
 minimumReleaseAgeExclude:
+  - lildocs
   - local-postgres
