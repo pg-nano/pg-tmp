@@ -1,11 +1,19 @@
-import type { StdioOptions } from 'node:child_process'
+import { spawn as spawnChild, type StdioOptions } from 'node:child_process'
 import { promises as fs, rmSync } from 'node:fs'
-import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { dedent, noop, sift, sleep, tryit } from 'radashi'
+import {
+  ensurePostgresDatabase,
+  getPostgresVersion,
+  initPostgresDataDir,
+  startPostgresDataDir,
+  stopPostgresDataDir,
+  LocalPostgresError,
+  type LocalPostgresLogger,
+  type PostgresListenOptions,
+} from 'local-postgres/core'
+import { noop, sift } from 'radashi'
 import { glob } from 'tinyglobby'
-import spawn from 'tinyspawn'
 
 const OS_TMP = os.tmpdir()
 const isTest = !!process.env.PGTMP_TEST
@@ -49,28 +57,30 @@ export async function initdb(
 
   const dataPath = path.join(dataDir, DATA_DIR)
 
-  await fs.mkdir(dataPath, { recursive: true })
-  await spawn(
-    'initdb',
-    ['--nosync', '-D', dataPath, '-E', 'UNICODE', '-A', 'trust'],
-    { stdio },
-  )
+  if (await readDataDirectoryVersion(dataDir)) {
+    throw new Error(
+      `PostgreSQL data directory is already initialized: ${dataPath}`,
+    )
+  }
 
-  const confPath = path.join(dataPath, 'postgresql.conf')
-  await fs.appendFile(
-    confPath,
-    dedent`
-      unix_socket_directories = '${dataPath}'
-      listen_addresses = ''
-      shared_buffers = 12MB
-      fsync = off
-      synchronous_commit = off
-      full_page_writes = off
-      log_min_duration_statement = 0
-      log_connections = on
-      log_disconnections = on
-    `,
-  )
+  await initPostgresDataDir({
+    dataDir: dataPath,
+    auth: 'trust',
+    encoding: 'UNICODE',
+    noSync: true,
+    config: {
+      unix_socket_directories: dataPath,
+      listen_addresses: '',
+      shared_buffers: '12MB',
+      fsync: false,
+      synchronous_commit: false,
+      full_page_writes: false,
+      log_min_duration_statement: 0,
+      log_connections: true,
+      log_disconnections: true,
+    },
+    log: stdio === 'inherit' ? 'inherit' : undefined,
+  })
 
   await fs.writeFile(path.join(dataDir, 'NEW'), '')
   return dataDir
@@ -200,21 +210,40 @@ export async function start(options: StartOptions = {}) {
     }
   }
 
-  let { postgresOptions = '', timeout = 60 } = options
+  const { postgresOptions = '', timeout = 60 } = options
 
+  const dataPath = path.join(dataDir, DATA_DIR)
   let host: string | undefined
   let port: number | undefined
+  let listen: PostgresListenOptions
 
   if (options.host) {
     host = options.host === true ? '127.0.0.1' : options.host
-    port ??= await getUnusedPort()
-    postgresOptions &&= postgresOptions + ' '
-    postgresOptions += `-c listen_addresses='*' -c port=${port}`
+    listen = { type: 'tcp', host, port: options.port }
+  } else {
+    listen = { type: 'socket', socketDir: dataPath }
   }
+
+  const server = await startPostgresDataDir({
+    dataDir: dataPath,
+    listen,
+    postgresOptions: splitPostgresOptions(postgresOptions),
+    log: { filePath: path.join(dataPath, 'postgres.log') },
+  })
+
+  if (server.host) {
+    port = server.port
+  }
+
+  await ensurePostgresDatabase({
+    listen: server.listen,
+    database: 'test',
+  })
 
   // If a valid timeout is specified, spawn a background process to
   // stop the database when the timeout expires.
   if (timeout > 0) {
+    await fs.writeFile(path.join(dataDir, 'stop.log'), '', { flag: 'a' })
     backgroundSpawn(
       'node',
       sift([
@@ -229,49 +258,10 @@ export async function start(options: StartOptions = {}) {
     )
   }
 
-  const versionedDataDir = path.join(dataDir, DATA_DIR)
-
-  const startFlags = [
-    '-W', // Don't wait for confirmation
-    '-s', // Silent mode
-    '-D', // Data directory
-    versionedDataDir,
-    '-l', // Log file
-    path.join(versionedDataDir, 'postgres.log'),
-  ]
-
-  if (postgresOptions) {
-    startFlags.push('-o', postgresOptions)
-  }
-
-  await spawn('pg_ctl', [...startFlags, 'start'])
-
-  for (let i = 0; i < 5; ) {
-    try {
-      await spawn('createdb', ['-E', 'UNICODE', 'test'], {
-        env: {
-          ...process.env,
-          PGHOST: versionedDataDir,
-          PGPORT: String(port ?? ''),
-        },
-      })
-      break
-    } catch (error: any) {
-      if (error.message.includes('already exists')) {
-        break
-      }
-      if (++i < 5) {
-        await sleep(100)
-      } else {
-        throw error
-      }
-    }
-  }
-
   return {
     dsn: port
       ? `postgresql://${host}:${port}/test`
-      : `postgresql:///test?host=${encodeURIComponent(versionedDataDir)}`,
+      : `postgresql:///test?host=${encodeURIComponent(dataPath)}`,
     dataDir,
     stop: (options?: StopOptions) => stop(dataDir, { host, port, ...options }),
   }
@@ -357,16 +347,12 @@ export async function stop(dataDir: string, options: StopOptions = {}) {
     initialTimeout = 0,
     host,
     port,
-    stdio,
     verbose,
     force,
   } = options
 
-  const env = {
-    ...process.env,
-    PGHOST: host ?? dataDir,
-    PGPORT: String(port ?? ''),
-  }
+  const listen = resolveListenOptions(dataDir, host, port)
+  const logger = verbose ? consoleLogger : undefined
 
   // If the timeout is set to zero or negative, stop the database even
   // if there are active connections.
@@ -374,40 +360,30 @@ export async function stop(dataDir: string, options: StopOptions = {}) {
     if (verbose) {
       console.log('waiting for active connections to finish')
     }
-    // Wait for all active PostgreSQL connections to finish before
-    // stopping the server. This query checks for any active database
-    // connections and loops until they're all closed.
-    const testQuery = /* sql */ `
-      SELECT count(*) FROM pg_stat_activity
-      WHERE datname IS NOT NULL
-      AND state IS NOT NULL;
-    `
-    for (let count = 2, attempts = 0; count >= 2; ) {
-      await sleep((attempts++ ? timeout : initialTimeout) * 1000)
-      const [error, result] = await tryit(spawn)(
-        'psql',
-        ['test', '--no-psqlrc', '-At', '-c', testQuery],
-        { env },
-      )
-      if (error) {
-        if ('stderr' in error) {
-          console.error(error.stderr)
+    for (let attempts = 0; ; attempts++) {
+      try {
+        await stopPostgresDataDir({
+          dataDir,
+          listen,
+          waitForIdle: {
+            database: 'test',
+            timeoutMs: (attempts ? timeout : initialTimeout) * 1000,
+          },
+          logger,
+        })
+        break
+      } catch (error) {
+        if (!isIdleTimeout(error)) {
+          throw error
         }
-        throw error
-      }
-      count = Number(result.stdout.trim() || 0)
-      if (verbose) {
-        console.log(`number of active connections: ${count}`)
       }
     }
+  } else {
+    if (verbose) {
+      console.log('stopping postgres...')
+    }
+    await stopPostgresDataDir({ dataDir, listen, logger })
   }
-
-  if (verbose) {
-    console.log('stopping postgres...')
-  }
-
-  // Stop the server.
-  await spawn('pg_ctl', ['-W', '-D', dataDir, 'stop'], { env, stdio })
 
   if (!keep) {
     if (verbose) {
@@ -419,25 +395,6 @@ export async function stop(dataDir: string, options: StopOptions = {}) {
       force: true,
     })
   }
-}
-
-async function getUnusedPort() {
-  return new Promise<number>((resolve, reject) => {
-    const server = net.createServer()
-    server.listen(0, '0.0.0.0', () => {
-      const addr = server.address()
-      if (!addr || typeof addr !== 'object') {
-        return reject(new Error('Failed to get unused port'))
-      }
-      const port = addr.port
-      server.close(() => resolve(port))
-    })
-    server.on('error', reject)
-  })
-}
-
-async function getPostgresVersion() {
-  return (await spawn('pg_ctl', ['-V'])).stdout.split(' ')[2]
 }
 
 function getPostgresDataVersion(pgVersion: string) {
@@ -477,7 +434,19 @@ async function isOwnedByCurrentUser(path: string) {
 }
 
 async function exec(cmd: string, args: string[]) {
-  return (await spawn(cmd, args)).stdout.trim()
+  const child = spawnChild(cmd, args, { stdio: ['ignore', 'pipe', 'ignore'] })
+  let stdout = ''
+  child.stdout?.setEncoding('utf8')
+  child.stdout?.on('data', chunk => {
+    stdout += chunk
+  })
+  await new Promise<void>((resolve, reject) => {
+    child.on('error', reject)
+    child.on('exit', code => {
+      code === 0 ? resolve() : reject(new Error(`${cmd} exited with ${code}`))
+    })
+  })
+  return stdout.trim()
 }
 
 function backgroundSpawn(realCmd: string, realArgs: string[]) {
@@ -493,8 +462,71 @@ function backgroundSpawn(realCmd: string, realArgs: string[]) {
     argv = ['-n', '19']
   }
   argv = [...argv, realCmd, ...realArgs]
-  spawn(cmd, argv, {
+  spawnChild(cmd, argv, {
     stdio: 'ignore',
     detached: true,
   }).unref()
+}
+
+function resolveListenOptions(
+  dataDir: string,
+  host?: string,
+  port?: number,
+): PostgresListenOptions {
+  return host
+    ? { type: 'tcp', host, port }
+    : { type: 'socket', socketDir: dataDir }
+}
+
+function splitPostgresOptions(options: string) {
+  const args: string[] = []
+  let current = ''
+  let quote: string | undefined
+  let escaped = false
+  for (const char of options.trim()) {
+    if (escaped) {
+      current += char
+      escaped = false
+    } else if (char === '\\') {
+      escaped = true
+    } else if (quote) {
+      if (char === quote) {
+        quote = undefined
+      } else {
+        current += char
+      }
+    } else if (char === '"' || char === "'") {
+      quote = char
+    } else if (/\s/.test(char)) {
+      if (current) {
+        args.push(current)
+        current = ''
+      }
+    } else {
+      current += char
+    }
+  }
+  if (escaped) {
+    current += '\\'
+  }
+  if (quote) {
+    throw new Error('Unterminated quote in postgresOptions')
+  }
+  if (current) {
+    args.push(current)
+  }
+  return args
+}
+
+function isIdleTimeout(error: unknown) {
+  return (
+    error instanceof LocalPostgresError &&
+    error.message.includes('waiting for Postgres connections to become idle')
+  )
+}
+
+const consoleLogger: LocalPostgresLogger = {
+  info: console.log,
+  warn: console.warn,
+  error: console.error,
 }

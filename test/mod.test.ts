@@ -1,9 +1,12 @@
+import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { promisify } from 'node:util'
 import { sleep } from 'radashi'
-import spawn from 'tinyspawn'
 import { initdb, PREFIX, start } from '../src/mod.ts'
+
+const execFileAsync = promisify(execFile)
 
 test('full lifecycle', async () => {
   const dataDir = await initdb()
@@ -15,6 +18,16 @@ test('full lifecycle', async () => {
     throw error
   })
   expect(typeof dsn).toBe('string')
+  await verifyDatabase(dsn)
+  await stop()
+})
+
+test('tcp lifecycle', async () => {
+  const { dsn, stop } = await start({
+    timeout: 0,
+    host: true,
+  })
+  expect(dsn).toMatch(/^postgresql:\/\/127\.0\.0\.1:\d+\/test$/)
   await verifyDatabase(dsn)
   await stop()
 })
@@ -67,17 +80,9 @@ describe('initdb', () => {
 
   test('pass an initialized data directory', async () => {
     const dataDir = await initdb()
-    const promise = initdb(dataDir)
-    const stderrPromise = promise.catch(error =>
-      error.stderr
-        .replaceAll(os.tmpdir(), '$TMPDIR')
-        .replace(/pg_tmp\.(\w+)/g, 'pg_tmp.XXXXXX'),
+    await expect(initdb(dataDir)).rejects.toThrow(
+      'PostgreSQL data directory is already initialized',
     )
-    await expect(promise).rejects.toThrow()
-    await expect(stderrPromise).resolves.toMatchInlineSnapshot(`
-      "initdb: error: directory "$TMPDIR/pg_tmp.XXXXXX/data" exists but is not empty
-      initdb: hint: If you want to create a new database system, either remove or empty the directory "$TMPDIR/pg_tmp.XXXXXX/data" or run initdb with an argument other than "$TMPDIR/pg_tmp.XXXXXX/data"."
-    `)
   })
 })
 
@@ -101,14 +106,13 @@ function verifyDataDirectory(dataDir: string) {
 }
 
 async function verifyDatabase(dsn: string) {
-  const result = await spawn('psql', [
+  const result = await execFileAsync('psql', [
     '--no-psqlrc',
     '-At',
     '-c',
     'select 1',
     dsn,
   ])
-  expect(result.exitCode).toBe(0)
   expect(result.stdout.trim()).toBe('1')
 }
 
