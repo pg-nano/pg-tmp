@@ -14,6 +14,7 @@ const isTest = !!process.env.PGTMP_TEST
  * Data directories created by this module are named with this prefix.
  */
 export const PREFIX = 'pg_tmp.'
+const DATA_DIR = 'data'
 
 export type InitOptions = {
   /**
@@ -46,28 +47,20 @@ export async function initdb(
 ) {
   dataDir ||= await fs.mkdtemp(path.join(OS_TMP, PREFIX))
 
-  const pgVersion = await getPostgresVersion()
+  const dataPath = path.join(dataDir, DATA_DIR)
 
-  await fs.mkdir(path.join(dataDir, pgVersion), { recursive: true })
+  await fs.mkdir(dataPath, { recursive: true })
   await spawn(
     'initdb',
-    [
-      '--nosync',
-      '-D',
-      path.join(dataDir, pgVersion),
-      '-E',
-      'UNICODE',
-      '-A',
-      'trust',
-    ],
+    ['--nosync', '-D', dataPath, '-E', 'UNICODE', '-A', 'trust'],
     { stdio },
   )
 
-  const confPath = path.join(dataDir, pgVersion, 'postgresql.conf')
+  const confPath = path.join(dataPath, 'postgresql.conf')
   await fs.appendFile(
     confPath,
     dedent`
-      unix_socket_directories = '${path.join(dataDir, pgVersion)}'
+      unix_socket_directories = '${dataPath}'
       listen_addresses = ''
       shared_buffers = 12MB
       fsync = off
@@ -151,6 +144,7 @@ export type PgTmp = Awaited<ReturnType<typeof start>>
  */
 export async function start(options: StartOptions = {}) {
   const pgVersion = await getPostgresVersion()
+  const pgDataVersion = getPostgresDataVersion(pgVersion)
 
   let { dataDir } = options
 
@@ -161,7 +155,7 @@ export async function start(options: StartOptions = {}) {
       dir = path.join(OS_TMP, dir)
 
       // Postgres versions must match.
-      if ((await stat(path.join(dir, pgVersion)))?.isDirectory()) {
+      if ((await readDataDirectoryVersion(dir)) === pgDataVersion) {
         // The 'NEW' file must exist and be owned by the current user.
         const unusedMarker = path.join(dir, 'NEW')
         if (await isOwnedByCurrentUser(unusedMarker)) {
@@ -189,10 +183,21 @@ export async function start(options: StartOptions = {}) {
     )
   }
   // If a data directory was provided: Initialize the database if a
-  // subdirectory for the current Postgres version is either missing
-  // or not owned by the current user.
-  else if (!(await isOwnedByCurrentUser(path.join(dataDir, pgVersion)))) {
-    await initdb(dataDir)
+  // cluster directory is either missing or not owned by the current
+  // user.
+  else {
+    const dataVersion = await readDataDirectoryVersion(dataDir)
+    if (dataVersion && dataVersion !== pgDataVersion) {
+      throw new Error(
+        `PostgreSQL data directory version ${dataVersion} does not match server version ${pgDataVersion}`,
+      )
+    }
+    if (
+      !dataVersion ||
+      !(await isOwnedByCurrentUser(path.join(dataDir, DATA_DIR)))
+    ) {
+      await initdb(dataDir)
+    }
   }
 
   let { postgresOptions = '', timeout = 60 } = options
@@ -224,7 +229,7 @@ export async function start(options: StartOptions = {}) {
     )
   }
 
-  const versionedDataDir = path.join(dataDir, pgVersion)
+  const versionedDataDir = path.join(dataDir, DATA_DIR)
 
   const startFlags = [
     '-W', // Don't wait for confirmation
@@ -340,8 +345,7 @@ export type StopOptions = {
  * valid PostgreSQL data directory.
  */
 export async function stop(dataDir: string, options: StopOptions = {}) {
-  const pgVersion = await getPostgresVersion()
-  dataDir = path.join(dataDir, pgVersion)
+  dataDir = path.join(dataDir, DATA_DIR)
 
   if (!(await stat(dataDir))?.isDirectory()) {
     throw new Error('Please specify a valid PostgreSQL data directory')
@@ -434,6 +438,22 @@ async function getUnusedPort() {
 
 async function getPostgresVersion() {
   return (await spawn('pg_ctl', ['-V'])).stdout.split(' ')[2]
+}
+
+function getPostgresDataVersion(pgVersion: string) {
+  // PG_VERSION stores 9.x clusters as "9.6" and newer clusters as "17".
+  return pgVersion.startsWith('9.')
+    ? pgVersion.split('.').slice(0, 2).join('.')
+    : pgVersion.split('.')[0]
+}
+
+async function readDataDirectoryVersion(rootDir: string) {
+  return await fs
+    .readFile(path.join(rootDir, DATA_DIR, 'PG_VERSION'), 'utf8')
+    .then(
+      version => version.trim(),
+      () => null,
+    )
 }
 
 async function stat(path: string) {

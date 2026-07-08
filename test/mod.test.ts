@@ -5,8 +5,6 @@ import { sleep } from 'radashi'
 import spawn from 'tinyspawn'
 import { initdb, PREFIX, start } from '../src/mod.ts'
 
-const pgVersion = await getPostgresVersion()
-
 test('full lifecycle', async () => {
   const dataDir = await initdb()
   const { dsn, stop } = await start({
@@ -77,8 +75,8 @@ describe('initdb', () => {
     )
     await expect(promise).rejects.toThrow()
     await expect(stderrPromise).resolves.toMatchInlineSnapshot(`
-      "initdb: error: directory "$TMPDIR/pg_tmp.XXXXXX/17.0" exists but is not empty
-      initdb: hint: If you want to create a new database system, either remove or empty the directory "$TMPDIR/pg_tmp.XXXXXX/17.0" or run initdb with an argument other than "$TMPDIR/pg_tmp.XXXXXX/17.0"."
+      "initdb: error: directory "$TMPDIR/pg_tmp.XXXXXX/data" exists but is not empty
+      initdb: hint: If you want to create a new database system, either remove or empty the directory "$TMPDIR/pg_tmp.XXXXXX/data" or run initdb with an argument other than "$TMPDIR/pg_tmp.XXXXXX/data"."
     `)
   })
 })
@@ -95,13 +93,9 @@ afterAll(async () => {
   }
 })
 
-async function getPostgresVersion() {
-  return (await spawn('pg_ctl', ['-V'])).stdout.split(' ')[2]
-}
-
 function verifyDataDirectory(dataDir: string) {
   expect(fs.statSync(dataDir).isDirectory()).toBe(true)
-  expect(fs.existsSync(path.join(dataDir, pgVersion, 'postgresql.conf'))).toBe(
+  expect(fs.existsSync(path.join(dataDir, 'data', 'postgresql.conf'))).toBe(
     true,
   )
 }
